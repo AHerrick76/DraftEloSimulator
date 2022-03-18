@@ -8,6 +8,68 @@ import numpy as np
 import pandas as pd
 from enum import Enum
 import time
+import pickle
+import math
+from os.path import join
+
+def generate_player_distribution(tournament_type, distribution_type, player_count, std_dev_scalar=1):
+	'''
+	Load summary statistics from 17lands data according to format type, and retrieve standard deviation.
+
+	Use standard deviation to find implied distribution scale from Chess ELO formula.
+	Recall that formula is WinPercentage = 1 / (1 + 10^((Elo_p1 - Elo_p2) / 400).
+	We define a spread n such that a player 1 standard deviation above the mean (with Elo 1000 + n)
+	will win against the average player 50 + StandardDeviation percent of the time. Player 1 here
+	has Elo 1000 + n, whereas player 2 has Elo 1000.
+
+	See below algebra:
+	.5 + StdDev = 1 / (1 + 10^(-n / 400))
+	1 + 10^(-n/400) = 1 / (.5 + StdDev)
+	10^(-n/400) = (.5 - StdDev) / (.5 + StdDev)
+	log(10^(-n/400)) = log((.5 - StdDev) / (.5 + StdDev))
+	(-n/400) = log((.5 - StdDev) / (.5 + StdDev))
+	-n = 400 * log((.5 - StdDev) / (.5 + StdDev))
+
+	Next, use the identified parameter to create a distribution of player ELOs and initialize
+	the player dataframe
+	'''
+
+	# load summary statistics from 17lands data
+	with open(join('Data', tournament_type + '_stats.pkl', 'rb')) as h:
+		stats = pickle.load(h)
+
+	# find distribution scalar
+	# it's reasonable to think that the data's standard deviation estimate is biased downward,
+	# because we're disproportinately observing more skilled players with already above-average winrates
+	std_dev = stats['OverallStandardDeviation']
+	std_dev *= std_dev_scalar
+	target_scale = -1 * (400 * math.log((0.5 - std_dev) / (0.5 + std_dev), 10))
+
+	# initialize ELO distribution
+	if distribution_type == 'normal':
+		elo_dist = np.random.normal(1000, target_scale, player_count)
+	elif distribution_type == 'logistic':
+		elo_dist = np.random.logistic(1000, target_scale, player_count)
+
+	# initialize player distribution
+	player_df = pd.DataFrame(elo_dist, columns=['Elo'])
+	for col in [
+		'CurrentWins', 'CurrentLosses', 'TotalWins', 'TotalLosses', 'Drafts',
+		'GamesPlayed', 'Gems', 'Packs', 'FirstRoundWins', 'FirstRoundLosses', 'FinishedRares',
+		'FinishedMythics', 'CollectedRares', 'CollectedMythics', 'DraftsAtRareCompletion',
+		'GemsAtRareCompletion', 'DraftsAtMythicCompletion', 'GemsAtMythicCompletion',
+		'EloDeltaFirstRound', 'EloDeltaFinalRound', 'MeanEloDeltaFirstRound', 'MeanEloDeltaFinalRound'
+	]:
+		player_df[col] = 0
+		
+	player_df['PlayerID'] = player_df.index
+	# find implied winrate versus an average player from ELO
+	player_df['ImpliedWinrate'] = 1 / (1 + 10**((1000 - player_df.Elo) / 400))
+
+	# find percentile of player skill
+	player_df['EloPercentile'] = player_df.Elo.rank(pct=True).round(3) * 100
+
+	return player_df
 
 # define enums for tournament type
 class TournamentType(Enum):

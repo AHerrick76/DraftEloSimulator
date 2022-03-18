@@ -4,21 +4,14 @@ Master script to handle all processing
 
 __author__ = 'Austin Herrick'
 
-
-import numpy as np
-import pandas as pd
-import pickle
-import math
-import os
+import argparse
 from os.path import join
-import matplotlib.pyplot as plt
 
 from distribution_finder import process_all_data
 from visualizations import figure_manager
-from tournament_client import TournamentClient
-from tournament_client import TournamentType
+from tournament_client import generate_player_distribution, TournamentClient, TournamentType
 
-def main(mode):
+def main(requests):
 	'''
 	Handles all processing. Depending on function call, does one of the following:
 	
@@ -27,19 +20,18 @@ def main(mode):
 	- Creates all figures / results from draft simulations
 	'''
 
-	# loads all 17lands data, finds summary statistics, and produces required charts
-	if mode == 1:
+	# loads 17lands data, finds summary statistics, and produces data-related charts
+	if requests['process_data']:
 		process_all_data()
 	
 	# creates 100k player tournament clients, runs 5000 drafts in each, and caches results
-	elif mode == 2:
+	if requests['run_simulator']:
 		prepare_simulation('bo3')
 		prepare_simulation('bo1')
 
-	# create all simulation-related charts necessary for article
-	elif mode == 3:
+	# creates all simulation-related charts necessary for article
+	if requests['create_visualizations']:
 		figure_manager()	
-
 
 def prepare_simulation(draft_type):
 	'''
@@ -59,64 +51,54 @@ def prepare_simulation(draft_type):
 	tourney.play_n_drafts(5000)
 
 	# cache files
-	tourney.players.to_pickle(draft_type + '_draft_results.pkl')
+	tourney.players.to_pickle(join('Data', draft_type + '_draft_results.pkl'))
 
 
-def generate_player_distribution(tournament_type, distribution_type, player_count, std_dev_scalar=1):
-	'''
-	Load summary statistics from 17lands data according to format type, and retrieve standard deviation.
+def parse_input():
+	"""
+	Construct parser and fetch relevent flags for requested execution
+	"""
 
-	Use standard deviation to find implied distribution scale from Chess ELO formula.
-	Recall that formula is WinPercentage = 1 / (1 + 10^((Elo_p1 - Elo_p2) / 400).
-	We define a spread n such that a player 1 standard deviation above the mean (with Elo 1000 + n)
-	will win against the average player 50 + StandardDeviation percent of the time. Player 1 here
-	has Elo 1000 + n, whereas player 2 has Elo 1000.
+	# construct dictionary to populate with selected flags
+	requests = {
+		'process_data': False,
+		'run_simulator': False,
+		'create_visualizations': False
+	}
 
-	See below algebra:
-	.5 + StdDev = 1 / (1 + 10^(-n / 400))
-	1 + 10^(-n/400) = 1 / (.5 + StdDev)
-	10^(-n/400) = (.5 - StdDev) / (.5 + StdDev)
-	log(10^(-n/400)) = log((.5 - StdDev) / (.5 + StdDev))
-	(-n/400) = log((.5 - StdDev) / (.5 + StdDev))
-	-n = 400 * log((.5 - StdDev) / (.5 + StdDev))
+	parser = argparse.ArgumentParser()
 
-	Next, use the identified parameter to create a distribution of player ELOs and initialize
-	the player dataframe
-	'''
+	parser.add_argument(
+		'--process_data',
+		help="""Loads 17lands data, finds summary statistics, and produces data-related charts""",
+		action = 'store_true'
+	)
 
-	# load summary statistics from 17lands data
-	with open(tournament_type + '_stats.pkl', 'rb') as h:
-		stats = pickle.load(h)
+	parser.add_argument(
+		'--run_simulator',
+		help="""Creates 100k player tournament clients, runs 5000 drafts in each, and caches results""",
+		action = 'store_true'
+	)
 
-	# find distribution scalar
-	# it's reasonable to think that the data's standard deviation estimate is biased downward,
-	# because we're disproportinately observing more skilled players with already above-average winrates
-	std_dev = stats['OverallStandardDeviation']
-	std_dev *= std_dev_scalar
-	target_scale = -1 * (400 * math.log((0.5 - std_dev) / (0.5 + std_dev), 10))
+	parser.add_argument(
+		'--create_visualizations',
+		help="""Creates all simulation-related charts necessary for article""",
+		action = 'store_true'
+	)
 
-	# initialize ELO distribution
-	if distribution_type == 'normal':
-		elo_dist = np.random.normal(1000, target_scale, player_count)
-	elif distribution_type == 'logistic':
-		elo_dist = np.random.logistic(1000, target_scale, player_count)
+	args = parser.parse_args()
 
-	# initialize player distribution
-	player_df = pd.DataFrame(elo_dist, columns=['Elo'])
-	for col in [
-		'CurrentWins', 'CurrentLosses', 'TotalWins', 'TotalLosses', 'Drafts',
-		'GamesPlayed', 'Gems', 'Packs', 'FirstRoundWins', 'FirstRoundLosses', 'FinishedRares',
-		'FinishedMythics', 'CollectedRares', 'CollectedMythics', 'DraftsAtRareCompletion',
-		'GemsAtRareCompletion', 'DraftsAtMythicCompletion', 'GemsAtMythicCompletion',
-		'EloDeltaFirstRound', 'EloDeltaFinalRound', 'MeanEloDeltaFirstRound', 'MeanEloDeltaFinalRound'
-	]:
-		player_df[col] = 0
-		
-	player_df['PlayerID'] = player_df.index
-	# find implied winrate versus an average player from ELO
-	player_df['ImpliedWinrate'] = 1 / (1 + 10**((1000 - player_df.Elo) / 400))
+	if args.process_data:
+		requests['process_data'] = True
+	if args.run_simulator:
+		requests['run_simulator'] = True
+	if args.create_visualizations:
+		requests['create_visualizations'] = True
 
-	# find percentile of player skill
-	player_df['EloPercentile'] = player_df.Elo.rank(pct=True).round(3) * 100
+	return requests
 
-	return player_df
+# execute model with all requested steps
+if __name__ == '__main__':
+	requests = parse_input()
+	main(requests)
+

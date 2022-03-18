@@ -10,9 +10,7 @@ import os
 from os.path import join
 import matplotlib.pyplot as plt
 
-from tournament_client import TournamentClient
-from tournament_client import TournamentType
-from main import generate_player_distribution
+from tournament_client import generate_player_distribution, TournamentClient, TournamentType
 
 def figure_manager():
 	'''
@@ -43,8 +41,8 @@ def figure_manager():
 	handle_max_wins_plot(bo3_tourney.players, bo1_tourney.players, 'EloPercentile')
 
 	# load previously generated simulations
-	draft_data_bo3 = pd.read_pickle('bo3_draft_results.pkl')
-	draft_data_bo1 = pd.read_pickle('bo1_draft_results.pkl')
+	draft_data_bo3 = pd.read_pickle(join('Data', 'bo3_draft_results.pkl'))
+	draft_data_bo1 = pd.read_pickle(join('Data', 'bo1_draft_results.pkl'))
 
 	# compare expected and actual win rates
 	compare_realized_winrates(draft_data_bo1, draft_data_bo3)
@@ -400,120 +398,4 @@ def expected_vs_actual_trophy_rate(df_empirical, df_representative, draft_type):
 	summary.drop_duplicates('ModeledWinrate', inplace=True)
 
 	return summary
-
-
-def find_elo_outcome_distribution(tournament_type, elo, sensitivity = 30):
-	'''
-	Plots the distribution of outcomes for players at various elos
-	'''
-
-	# create appropriate tournament type
-	if tournament_type == TournamentType.BEST_OF_3:
-		bo3_million = generate_player_distribution('bo3', 'normal', 1000000, std_dev_scalar=1.5)
-		tourney = TournamentClient(bo3_million, TournamentType.BEST_OF_3)
-
-	elif tournament_type == TournamentType.BEST_OF_1:
-		bo1_million = generate_player_distribution('bo1', 'normal', 1000000, std_dev_scalar=1.5)
-		tourney = TournamentClient(bo1_million, TournamentType.BEST_OF_1)
-
-	# execute one draft with 1 million players
-	tourney.play_n_drafts(1)
-
-	# find record distribution surrounding the target elo
-	players = tourney.players
-	players = players[players.Elo.between(elo - sensitivity, elo + sensitivity)]
-	players['WinFrequency'] = players.groupby('TotalWins').Gems.transform('count')
-	players['WinFrequency'] /= players.WinFrequency.sum()
-
-
-def compare_distributions(df_normal, df_logistic):
-	'''
-	Function to compare winrate spread under different distributions assumptions
-	'''
-
-	# summarize winrate statistics for easier comparison
-	summary_normal = bucket_winrate(df_normal)
-	summary_logistic = bucket_winrate(df_logistic)
-
-	merged_summary = pd.merge(
-		summary_normal, summary_logistic, 
-		on='ImpliedWinrate', how='outer', 
-		suffixes=('Normal', 'Logistic'))
-
-	# graph merged data
-	merged_summary.sort_values('ImpliedWinrate').set_index('ImpliedWinrate').plot()
-	plt.show()
-
-def bucket_winrate(input_df):
-	'''
-	Helper function to bucket winrate for easier graphing
-	'''
-
-	# copy passed dataframe to avoid modifying in place
-	df = input_df.copy()
-	df['ImpliedWinrate'] *= 100
-	df['ImpliedWinrate'] = df.ImpliedWinrate.astype(int)
-	df['WinrateFrequency'] = df.groupby('ImpliedWinrate').Elo.transform('count')
-
-	return df[['ImpliedWinrate', 'WinrateFrequency']].drop_duplicates('ImpliedWinrate').sort_values('ImpliedWinrate')
-
-
-
-def cost_per_draft_all_metrics(df_bo1, df_bo3, pack_worth=20):
-	'''
-	Find curve of draft cost by several plausible win metrics, for both bo1 and bo3
-	drafts
-	'''
-
-	# iterate through each metric, and find mean draft costs
-	metric_holder = []
-	metric_list = ['ImpliedWinrate', 'FirstRoundWinrate', 'ModeledWinrate']
-	for metric in metric_list:
-		summary_bo1 = cost_per_draft(df_bo1, metric, pack_worth=pack_worth)
-		summary_bo3 = cost_per_draft(df_bo3, metric, pack_worth=pack_worth)
-		metric_summary = pd.merge(
-			summary_bo1,
-			summary_bo3,
-			left_index=True,
-			right_index=True,
-			how='outer',
-			suffixes=('BestOfOne', 'BestOfThree')
-		)
-		metric_holder.append(metric_summary)
-
-	# merge all found metrics together
-	full_summary = pd.merge(
-		metric_holder[0],
-		metric_holder[1],
-		left_index=True,
-		right_index=True,
-		how='outer',
-		suffixes=('_' + metric_list[0], '_' + metric_list[1])
-	)
-	full_summary = pd.merge(
-		full_summary,
-		metric_holder[2],
-		left_index=True,
-		right_index=True,
-		how='outer'
-	)
-	full_summary.rename(columns={
-		'NetGemsPerDraftBestOfOne': 'NetGemsPerDraftBestOfOne_ModeledWinrate',
-		'NetGemsPerDraftBestOfThree': 'NetGemsPerDraftBestOfThree_ModeledWinrate'
-	}, inplace=True)
-
-	# plot results
-	full_summary.plot()
-	plt.show()
-
-	return full_summary
-
-
-'''
-Track average elo delta between rounds
-Track frequency of draft outcomes (7 wins, 3-0, 2-1, etc) at various elos,
-by naive/sophisticated measurements
-
-'''
-
 

@@ -69,12 +69,16 @@ def parse_data(gameplay_str, output_type):
 	# create winrate by set graphs
 	create_report_graphs(df, output_type)
 
+	# create output folder, if it doesn't exist
+	if not os.path.exists('Figures'):
+		os.makedirs('Figures')
+
 	# dump results to pickle
-	with open(output_type + '_stats.pkl', 'wb') as h:
+	with open(join('Data', output_type + '_stats.pkl'), 'wb') as h:
 		pickle.dump(summary_stats, h, protocol=pickle.HIGHEST_PROTOCOL)
 
 	# save output dataframe for comparison later
-	df.to_pickle(output_type + '_data.pkl')
+	df.to_pickle(join('Data', output_type + '_data.pkl'))
 
 	return df
 

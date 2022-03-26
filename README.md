@@ -26,5 +26,5 @@ To run the model locally with default parameters, users should call the `main.py
 
 ## Contact Me:
 
-If you have any questions or feedback about the model or paper, or would like to extend the analysis in a new direction, please reach out to me via email at `atnherrick[aT]gmail.com`, or on Twitter at [@atnherrick](https://mobile.twitter.com/atnherrick).
+If you have any questions or feedback about the model or paper, or would like to extend the analysis in a new direction, please reach out to me via [email](mailto:atnherrick@gmail.com?subject=[GitHub]%20Draft%20Elo%20Model), or on Twitter at [@Atnherrick](https://mobile.twitter.com/atnherrick).
 

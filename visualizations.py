@@ -5,6 +5,7 @@ Script which creates all output tables & figures used in the article
 __author__ = 'Austin Herrick'
 
 import pandas as pd
+import numpy as np
 import math
 import os
 from os.path import join
@@ -29,6 +30,9 @@ def figure_manager():
 	bo1_tourney = TournamentClient(bo1_ten_million, TournamentType.BEST_OF_1)
 	bo1_tourney.play_n_drafts(1)
 
+	# create bo3 game vs match win graphs
+	match_game_delta()
+
 	# create elo vs implied winrate graph
 	elo_expected_winrate(bo3_ten_million)
 
@@ -43,15 +47,20 @@ def figure_manager():
 	# load previously generated simulations
 	draft_data_bo3 = pd.read_pickle(join('Data', 'bo3_draft_results.pkl'))
 	draft_data_bo1 = pd.read_pickle(join('Data', 'bo1_draft_results.pkl'))
+	draft_data_bo1['ImpliedWinrateMatch'] = draft_data_bo1.ImpliedWinrate
+	draft_data_bo1['GameWins'] = draft_data_bo1.TotalWins
+	draft_data_bo1['GameLosses'] = draft_data_bo1.TotalLosses
 
 	# compare expected and actual win rates
-	compare_realized_winrates(draft_data_bo1, draft_data_bo3)
+	summary_bo3 = compare_realized_winrates(draft_data_bo3, 'bo3')
+	summary_bo1 = compare_realized_winrates(draft_data_bo1, 'bo1')
+	compare_realized_winrates_delta(summary_bo3, summary_bo1)
 	plot_games_played(draft_data_bo1)
 
 	# find graphs on mean costs/packs per draft
 	summary_bo1 = cost_per_draft(draft_data_bo1, 'ModeledWinrate')
 	summary_bo3 = cost_per_draft(draft_data_bo3, 'ModeledWinrate')
-	plot_prizing(summary_bo1, summary_bo3, 'ModeledWinrate')
+	plot_prizing(summary_bo1, summary_bo3, 'Modeled Game Win Rate')
 	summary_bo1 = cost_per_draft(draft_data_bo1, 'EloPercentile')
 	summary_bo3 = cost_per_draft(draft_data_bo3, 'EloPercentile')
 	plot_prizing(summary_bo1, summary_bo3, 'EloPercentile')
@@ -65,13 +74,38 @@ def figure_manager():
 	trophy_summary = pd.merge(
 		summary_bo1,
 		summary_bo3,
-		on='ModeledWinrate',
+		on='EloPercentile',
 		how='outer',
 		suffixes=(' Premier', ' Traditional')
 	)
-	trophy_summary.set_index('ModeledWinrate')[['Trophy Fraction Premier', 'Trophy Fraction Traditional']]\
-		.plot(ylabel='Modeled - Implied Trophy Rate')
+	trophy_summary.sort_values('EloPercentile').set_index('EloPercentile')[['Trophy Fraction Premier', 'Trophy Fraction Traditional']]\
+		.plot(ylabel='Dynamic Model Trophies as a Fraction of Static Model Trophies')
 	plt.savefig(join('Figures', 'TrophyRateFraction.png'), bbox_inches='tight')
+	plt.close()
+
+	# compare EV in Static vs Dynamic Models
+	static_dynamic_model_comparison(draft_data_bo1, draft_data_bo3)
+
+def match_game_delta():
+	'''
+	Plots differences between game and match win rate in bo3 drafts
+
+	Given a game winrate of p, match win rate equals p^2(3 - 2p) via combinatorics
+	'''
+
+	# define function
+	p = np.linspace(0, 1, 500)
+	win_rate = p**2 * (3 - 2*p)
+	
+	# create plot showing match win rate bo1 vs bo3
+	fig = plt.figure()
+	ax = fig.add_subplot(111)
+	ax.plot(p, win_rate, 'r', label='Best of 3 (Traditional Draft)')
+	ax.plot(p, p, 'b', label='Best of 1 (Premier Draft)')
+	ax.set_xlabel('Game Win Rate')
+	ax.set_ylabel('Match Win Rate')
+	fig.legend(bbox_to_anchor=(0.52,1), bbox_transform=ax.transAxes)
+	plt.savefig(join('Figures', 'match_game_win_delta.png'), bbox_inches='tight')
 	plt.close()
 
 def elo_expected_winrate(input_df):
@@ -174,51 +208,63 @@ def maximum_wins_likelihood(input_players, xaxis):
 	
 	return summary
 
-def compare_realized_winrates(df_bo1, df_bo3):
+def compare_realized_winrates(data, draft_type):
 	'''
 	Creates a figure comparing implied win rate from Elo and realized win rate from actual
 	matches played
 	'''
+	
+	if draft_type == 'bo3':
+		draft_label = '-- Traditional Draft'
+	elif draft_type == 'bo1':
+		draft_label = '-- Premier Draft'
 
 	# copy input dataframe to avoid modifying in-place
-	data_holder = []
-	for data in [df_bo1, df_bo3]:
-		df = data.copy()
+	df = data.copy()
 
-		# calculate actual overall winrate, and winrate in the first round (i.e, fully random pairings)
-		df['ModeledWinrate'] = df.TotalWins / (df.TotalWins + df.TotalLosses)
-		df['FirstRoundWinrate'] = df.FirstRoundWins / (df.FirstRoundWins + df.FirstRoundLosses)
+	# calculate actual overall winrate, and winrate in the first round (i.e, fully random pairings)
+	df['ModeledWinrate'] = df.TotalWins / (df.TotalWins + df.TotalLosses)
+	df['FirstRoundWinrate'] = df.FirstRoundWins / (df.FirstRoundWins + df.FirstRoundLosses)
 
-		# find winrates by percentile 
-		df['Implied Win Rate'] = df.groupby('EloPercentile').ImpliedWinrate.transform('mean')
-		df['Modeled Win Rate'] = df.groupby('EloPercentile').ModeledWinrate.transform('mean')
+	# find winrates by percentile 
+	df['Implied Win Rate ' + draft_label] = df.groupby('EloPercentile').ImpliedWinrateMatch.transform('mean')
+	df['Modeled Win Rate ' + draft_label] = df.groupby('EloPercentile').ModeledWinrate.transform('mean')
 
-		df.rename(columns={'EloPercentile': 'Elo Percentile'}, inplace=True)
-		summary = df[['Elo Percentile', 'Implied Win Rate', 'Modeled Win Rate']]\
-			[df['Elo Percentile'].between(10, 90)]\
-			.drop_duplicates('Elo Percentile').sort_values('Elo Percentile').set_index('Elo Percentile')
-		data_holder.append(summary)
-	
-	# combine bo1 & bo3 data
+	df.rename(columns={'EloPercentile': 'Elo Percentile'}, inplace=True)
+	summary = df[['Elo Percentile', 'Implied Win Rate ' + draft_label, 'Modeled Win Rate ' + draft_label]]\
+		[df['Elo Percentile'].between(10, 90)]\
+		.drop_duplicates('Elo Percentile').sort_values('Elo Percentile').set_index('Elo Percentile')
+
+	summary[['Implied Win Rate ' + draft_label, 'Modeled Win Rate ' + draft_label]].plot(ylabel='Win Rate')
+	plt.savefig(join('Figures', 'ImpliedVsModeledWinrate_' + draft_type + '.png'), bbox_inches='tight')
+	plt.close()
+
+	# calculate win rate delta (used for next graph)
+	summary['Win Rate Difference'] = summary['Modeled Win Rate ' + draft_label] - summary['Implied Win Rate ' + draft_label]
+
+	return summary
+
+def compare_realized_winrates_delta(summary_bo3, summary_bo1):
+	'''
+	Compare difference in expected and actual win rate, by draft type
+	'''
+
 	summary = pd.merge(
-		data_holder[0], 
-		data_holder[1],
+		summary_bo3, 
+		summary_bo1,
 		left_index=True,
 		right_index=True,
 		how='outer',
-		suffixes=(' Premier', ' Traditional')
+		suffixes=(' -- Traditional', ' -- Premier')
 	)
-
-	summary['Implied Win Rate'] = summary['Implied Win Rate Premier']
-	summary[['Implied Win Rate', 'Modeled Win Rate Premier', 'Modeled Win Rate Traditional']].plot(ylabel='Win Rate')
-	plt.savefig(join('Figures', 'ImpliedVsModeledWinrate.png'), bbox_inches='tight')
-	plt.close()
-
-	summary['Win Rate Difference -- Premier'] = summary['Modeled Win Rate Premier'] - summary['Implied Win Rate Premier']
-	summary['Win Rate Difference -- Traditional'] = summary['Modeled Win Rate Traditional'] - summary['Implied Win Rate Traditional']
 	summary['Equality'] = 0
 	summary[['Win Rate Difference -- Premier', 'Win Rate Difference -- Traditional', 'Equality']].plot(ylabel='Modeled Win Rate Less Expected Win Rate')
 	plt.savefig(join('Figures', 'ImpliedVsModeledWinrateDelta.png'), bbox_inches='tight')
+	plt.close()
+
+	# save plot of differences in implied win rate by format type
+	summary[['Implied Win Rate -- Premier Draft', 'Implied Win Rate -- Traditional Draft']].plot()
+	plt.savefig(join('Figures', 'ImpliedWinrateBo1vsBo3.png'))
 	plt.close()
 
 def plot_games_played(df_bo1):
@@ -246,8 +292,16 @@ def cost_per_draft(input_df, win_metric):
 	# back up dataframe to avoid inplace modification
 	df = input_df.copy()
 	if win_metric == 'ModeledWinrate':
-		df['ModeledWinrate'] = df.TotalWins / (df.TotalWins + df.TotalLosses)
-		df['ModeledWinrate'] = df.ModeledWinrate.round(3)
+
+		# for "Modeled Winrate" graphs, map game wins / game losses
+		df['Modeled Game Win Rate'] = df.GameWins / (df.GameWins + df.GameLosses)
+		win_metric = 'Modeled Game Win Rate'
+	
+	if win_metric == 'MatchWinrate':
+		df['MatchWinrate'] = df.TotalWins / (df.TotalWins + df.TotalLosses)
+	
+	df[win_metric] = df[win_metric].round(3)
+
 
 	# find mean draft cost, based on assumption of a pack's worth
 	df['Gems20'] = df.Gems + df.Packs * 20
@@ -284,13 +338,13 @@ def plot_prizing(summary_bo1, summary_bo3, win_metric):
 	# create gem plot
 	fig, ax = plt.subplots()
 	ax.plot(summary.index, summary['Cost20 Premier'], \
-		color='b', label='Cost per Draft (20 Gem Packs) Premier')
+		color='b', label='Cost per Draft (20 Gems/Pack) Premier')
 	ax.plot(summary.index, summary['Cost200 Premier'], ':', \
-		color='b', label='Cost per Draft (200 Gem Packs) Premier')
+		color='b', label='Cost per Draft (200 Gems/Pack) Premier')
 	ax.plot(summary.index, summary['Cost20 Traditional'], \
-		color='r', label='Cost per Draft (20 Gem Packs) Traditional')
+		color='r', label='Cost per Draft (20 Gems/Pack) Traditional')
 	ax.plot(summary.index, summary['Cost200 Traditional'], ':', \
-		color='r', label='Cost per Draft (200 Gem Packs) Traditional')
+		color='r', label='Cost per Draft (200 Gems/Pack) Traditional')
 	ax.legend()
 	ax.set_ylabel('Net Gems')
 	ax.set_xlabel(win_metric)
@@ -298,7 +352,7 @@ def plot_prizing(summary_bo1, summary_bo3, win_metric):
 	plt.close()
 
 	# create packs plot (only happens on first execution)
-	if win_metric == 'ModeledWinrate':
+	if win_metric == 'EloPercentile':
 		summary[['Packs per Draft Premier', 'Packs per Draft Traditional']].plot(ylabel='Packs')
 		plt.savefig(join('Figures', 'PacksPerDraft.png'), bbox_inches='tight')
 		plt.close()
@@ -309,7 +363,7 @@ def set_completion_plots(df_bo1, df_bo3):
 	'''
 
 	# compile plots by metric
-	for win_metric in ['ModeledWinrate', 'EloPercentile']:
+	for win_metric in ['Modeled Game Win Rate', 'EloPercentile']:
 		bo1_summary = set_completion(df_bo1, win_metric)
 		bo3_summary = set_completion(df_bo3, win_metric)
 		winrate_summary = pd.merge(
@@ -338,9 +392,9 @@ def set_completion(input_df, win_metric):
 	df = input_df.copy()
 
 	# prepare ModeledWinrate if needed
-	if win_metric == 'ModeledWinrate':
-		df['ModeledWinrate'] = df.TotalWins / (df.TotalWins + df.TotalLosses)
-		df['ModeledWinrate'] = df.ModeledWinrate.round(3)
+	if win_metric == 'Modeled Game Win Rate':
+		df['Modeled Game Win Rate'] = df.GameWins / (df.GameWins + df.GameLosses)
+		df['Modeled Game Win Rate'] = df['Modeled Game Win Rate'].round(3)
 
 	# collapse draft completion info
 	df['Average Drafts to Collect Rares'] = df.groupby(win_metric).DraftsAtRareCompletion.transform('mean')
@@ -387,15 +441,165 @@ def expected_vs_actual_trophy_rate(df_empirical, df_representative, draft_type):
 		on='EloPercentile',
 		how='inner'
 	)
-	summary.sort_values('ModeledWinrate').set_index('ModeledWinrate')[['Implied Trophy Rate', 'Modeled Trophy Rate']].plot()
+	summary.rename(columns={'ModeledWinrate': 'Match Win Rate'}, inplace=True)
+	summary.sort_values('Match Win Rate').set_index('Match Win Rate')[['Implied Trophy Rate', 'Modeled Trophy Rate']].plot()
 	plt.savefig(join('Figures', 'ImpliedvsActualTrophy_' + draft_type + '.png'), bbox_inches='tight')
 	plt.close()
 
-	# collapse by nearest winrate percents, calculate trophy fraction
+	# collapse by nearest elo percentile, calculate trophy fraction
 	summary['TrophyFraction'] = summary['Modeled Trophy Rate'] / summary['Implied Trophy Rate']
-	summary['ModeledWinrate'] = (summary.ModeledWinrate * 100).astype(int) / 100
-	summary['Trophy Fraction'] = summary.groupby('ModeledWinrate').TrophyFraction.transform('mean')
-	summary.drop_duplicates('ModeledWinrate', inplace=True)
+	summary['EloPercentile'] = summary.EloPercentile.round(0)
+	summary['Trophy Fraction'] = summary.groupby('EloPercentile').TrophyFraction.transform('mean')
+	summary.drop_duplicates('EloPercentile', inplace=True)
 
 	return summary
 
+def static_dynamic_model_comparison(draft_data_bo1, draft_data_bo3):
+	'''
+	Compares expected cost of drafting for both bo1 and bo3 using both the dynamic model
+	and a simpler static model
+	'''
+
+	summary_bo3 = compare_model_draft_cost(draft_data_bo3, 'bo3', 'MatchWinrate')
+	summary_bo1 = compare_model_draft_cost(draft_data_bo1, 'bo1', 'MatchWinrate')
+	ev_delta = pd.merge(
+		summary_bo3,
+		summary_bo1,
+		left_index=True,
+		right_index=True,
+		how='outer',
+		suffixes=(' -- Traditional', ' -- Premier')
+	)
+	ev_delta.index.rename('Modeled Match Win Rate', inplace=True)
+	ev_delta['Net Equality (For Visual Comparison)'] = 0
+	ev_delta[[x for x in ev_delta.columns if 'Delta' in x] + ['Net Equality (For Visual Comparison)']]\
+		.plot(ylabel='Dynamic Gems - Static Gems')
+	plt.savefig(join('Figures', 'StaticDynamicDeltas.png'), bbox_inches='tight')
+
+	summary_bo3 = compare_model_draft_cost(draft_data_bo3, 'bo3', 'ImpliedWinrateMatch')
+	summary_bo1 = compare_model_draft_cost(draft_data_bo1, 'bo1', 'ImpliedWinrateMatch')
+	ev_delta = pd.merge(
+		summary_bo3,
+		summary_bo1,
+		left_index=True,
+		right_index=True,
+		how='outer',
+		suffixes=(' -- Traditional', ' -- Premier')
+	)
+	ev_delta.index.rename('Implied Match Win Rate', inplace=True)
+	ev_delta['Net Equality (For Visual Comparison)'] = 0
+	ev_delta[[x for x in ev_delta.columns if 'Delta' in x] + ['Net Equality (For Visual Comparison)']]\
+		.plot(ylabel='Dynamic Gems - Static Gems')
+	plt.savefig(join('Figures', 'StaticDynamicDeltasImplied.png'), bbox_inches='tight')
+
+
+def compare_model_draft_cost(df, draft_type, win_metric):
+	'''
+	Compares net draft cost by win rate, dynamic model vs static model
+	'''
+
+	# find prizing in dynamic vs static model
+	summary = cost_per_draft(df, win_metric)
+	summary = expected_net_cost_static_model(summary, draft_type, win_metric)
+
+	summary['Static Model (20 Gems/Pack)'] = summary.StaticGems + 20*summary.StaticPacks - 1500
+	summary['Static Model (200 Gems/Pack)'] = summary.StaticGems + 200*summary.StaticPacks - 1500
+	summary.rename(columns={
+		'Cost20': 'Dynamic Model (20 Gems/Pack)', 
+		'Cost200': 'Dynamic Model (200 Gems/Pack)'}, inplace=True
+	)
+
+	summary['Delta (20 Gems/Pack)'] = summary['Dynamic Model (20 Gems/Pack)'] - summary['Static Model (20 Gems/Pack)']
+
+
+	# create gem plot
+	fig, ax = plt.subplots()
+	summary.set_index(win_metric, inplace=True)
+	ax.plot(summary.index, summary['Dynamic Model (20 Gems/Pack)'], \
+		color='b', label='Dynamic Model (20 Gems/Pack)')
+	ax.plot(summary.index, summary['Dynamic Model (200 Gems/Pack)'], ':', \
+		color='b', label='Dynamic Model (200 Gems/Pack)')
+	ax.plot(summary.index, summary['Static Model (20 Gems/Pack)'], \
+		color='r', label='Static Model (20 Gems/Pack)')
+	ax.plot(summary.index, summary['Static Model (200 Gems/Pack)'], ':', \
+		color='r', label='Static Model (200 Gems/Pack)')		
+	ax.legend()
+	ax.set_ylabel('Net Gems')
+	ax.set_xlabel('Match Win Rate')
+	plt.savefig(join('Figures', 'StaticVsDynamicCost' + win_metric + '_' + draft_type + '.png'), bbox_inches='tight')
+	plt.close()
+
+	return summary
+
+def expected_net_cost_static_model(df, draft_type, win_metric):
+	'''
+	Finds expected net cost of a draft by match winrate, for both bo1 and bo3, using a static model
+	
+	Note on the Bo1 Math:
+	In order to achieve any bo1 record of X wins (below 7), a player needs to win X games
+	and lose 2, in any order, and then lose a third game. This is represented by the
+	following probability: 
+
+	((x+2) choose x) * p^x * (1-p)^2, * (1-p), for x in [0, 6]
+
+	Notably, ((x + 2) choose x) simplifies to (x+2)(x+1)/2
+	'''
+
+	# define outcome space for bo3 drafts
+	if draft_type == 'bo3':
+
+		# assign pack rewards for 0-1 wins (1 pack), 2 wins (4 packs), or 3 wins (6 packs)
+		three_win_fraction = (df[win_metric] ** 3)
+		two_win_fraction = (df[win_metric] ** 2) * (1 - df[win_metric]) * 3
+		less_wins_fraction = (1 - df[win_metric])**3 + (1 - df[win_metric])**2 * (df[win_metric]) * 3
+		df['StaticPacks'] = three_win_fraction * 6 + \
+			two_win_fraction * 4 + \
+			less_wins_fraction * 1
+		df['StaticGems'] = three_win_fraction * 3000 + \
+			two_win_fraction * 1500 + \
+			less_wins_fraction * 0
+
+	if draft_type == 'bo1':
+		pack_prizes = {
+			0: 1,
+			1: 1,
+			2: 2,
+			3: 2,
+			4: 3,
+			5: 4,
+			6: 5,
+			7: 6
+		}
+
+		gem_prizes = {
+			0: 50,
+			1: 100,
+			2: 250,
+			3: 1000,
+			4: 1400,
+			5: 1600,
+			6: 1800,
+			7: 2200
+		}
+		
+		df['StaticPacks'] = 0
+		df['StaticGems'] = 0
+		for i in range(7):
+			df['StaticPacks'] += pack_prizes[i] * \
+				(1 - df[win_metric])**3 * \
+				(df[win_metric])**i * \
+				((i + 2) * (i + 1) * (1/2))
+			df['StaticGems'] += gem_prizes[i] * \
+				(1 - df[win_metric])**3 * \
+				(df[win_metric])**i * \
+				((i + 2) * (i + 1) * (1/2))
+
+		# separately calculate 7 win prizes, using formula discussed above		
+		df['StaticPacks'] += pack_prizes[7] * ((df[win_metric] ** 9) + \
+			((df[win_metric] ** 8) * ((1 - df[win_metric]) ** 1)) * ((math.factorial(9)) / (math.factorial(8) * math.factorial(9 - 8))) + \
+			((df[win_metric] ** 7) * ((1 - df[win_metric]) ** 2)) * ((math.factorial(9)) / (math.factorial(7) * math.factorial(9 - 7))))
+		df['StaticGems'] += gem_prizes[7] * ((df[win_metric] ** 9) + \
+			((df[win_metric] ** 8) * ((1 - df[win_metric]) ** 1)) * ((math.factorial(9)) / (math.factorial(8) * math.factorial(9 - 8))) + \
+			((df[win_metric] ** 7) * ((1 - df[win_metric]) ** 2)) * ((math.factorial(9)) / (math.factorial(7) * math.factorial(9 - 7))))
+
+	return df

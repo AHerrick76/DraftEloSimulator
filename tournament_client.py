@@ -35,7 +35,7 @@ def generate_player_distribution(tournament_type, distribution_type, player_coun
 	'''
 
 	# load summary statistics from 17lands data
-	with open(join('Data', tournament_type + '_stats.pkl', 'rb')) as h:
+	with open(join('Data', tournament_type + '_stats.pkl'), 'rb') as h:
 		stats = pickle.load(h)
 
 	# find distribution scalar
@@ -58,13 +58,15 @@ def generate_player_distribution(tournament_type, distribution_type, player_coun
 		'GamesPlayed', 'Gems', 'Packs', 'FirstRoundWins', 'FirstRoundLosses', 'FinishedRares',
 		'FinishedMythics', 'CollectedRares', 'CollectedMythics', 'DraftsAtRareCompletion',
 		'GemsAtRareCompletion', 'DraftsAtMythicCompletion', 'GemsAtMythicCompletion',
-		'EloDeltaFirstRound', 'EloDeltaFinalRound', 'MeanEloDeltaFirstRound', 'MeanEloDeltaFinalRound'
+		'EloDeltaFirstRound', 'EloDeltaFinalRound', 'MeanEloDeltaFirstRound', 'MeanEloDeltaFinalRound',
+		'GameWins', 'GameLosses'
 	]:
 		player_df[col] = 0
 		
 	player_df['PlayerID'] = player_df.index
 	# find implied winrate versus an average player from ELO
 	player_df['ImpliedWinrate'] = 1 / (1 + 10**((1000 - player_df.Elo) / 400))
+	player_df['ImpliedWinrateMatch'] = (player_df.ImpliedWinrate ** 2) * (3 - 2*player_df.ImpliedWinrate)
 
 	# find percentile of player skill
 	player_df['EloPercentile'] = player_df.Elo.rank(pct=True).round(3) * 100
@@ -82,7 +84,7 @@ class TournamentClient():
 	Controls players within a client
 	'''
 
-	def __init__(self, players, tournament_type, deck_quality_advantage=0.1):
+	def __init__(self, players, tournament_type, deck_quality_advantage=0.075):
 
 		# define basic parameters
 		self.players = players
@@ -262,6 +264,26 @@ class TournamentClient():
 		# scale win probability based on deck quality delta
 		pairings['DeckQualityDelta'] = pairings.DeckQuality - pairings.NextQuality
 		pairings['WinProbability'] *= (1 + (pairings.DeckQualityDelta * self.deck_quality_advantage))
+
+		# in best of 3 tournaments, scale game win rate to match win rate (winning 2 games out of 3)
+		# a player can win a bo3 round with WW, WLW, or LWW combinations, or p^2 + 2(p^2)(1-p),
+		# or p^2(3 - 2p)
+		# game wins/losses also tracks the likelihood of particular match outcomes
+		if self.tournament_type == TournamentType.BEST_OF_3:
+
+			# track game outcomes by cumulative probability
+			# (lose in 3 isn't tracked explicitly, since its cumulative probability is always 1)
+			pairings['WinIn3'] = (pairings.WinProbability ** 2) * (1 - pairings.WinProbability) * 2
+			pairings['WinIn2'] = pairings.WinIn3 + pairings.WinProbability ** 2
+			pairings['LoseIn2'] = pairings.WinIn2 + (1 - pairings.WinProbability)**2
+		
+			pairings.loc[pairings.MatchOutcome < pairings.WinIn3, 'GameLosses'] += 1
+			pairings.loc[pairings.MatchOutcome < pairings.WinIn2, 'GameWins'] += 2
+			pairings.loc[pairings.MatchOutcome > pairings.WinIn2, 'GameLosses'] += 2
+			pairings.loc[pairings.MatchOutcome > pairings.LoseIn2, 'GameWins'] += 1
+
+			# track match win probability
+			pairings['WinProbability'] = (pairings.WinProbability**2) * (3 - 2 * pairings.WinProbability)
 		
 		pairings['FirstPlayerWins'] = (pairings.MatchOutcome < pairings.WinProbability).astype(int)
 		pairings['CheckVictory'] = pairings.FirstPlayerWins.shift(1)

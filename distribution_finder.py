@@ -4,10 +4,10 @@ Uses 17lands data to find winrate distribution among Magic players.
 Note that this data only captures winrates among players who use the 17lands MTG Arena extension -
 These players are typically more enfranchised than the average player, and this is reflected in
 their average winrate, which generally hovers between 58-60%, when the overall winrate
-must be 50%*. I use this data to estimate the standard deviation of winrate within the Magic
+must be very close to 50%*. I use this data to estimate the standard deviation of winrate within the Magic
 drafting community.
 
-* This is not 100% true. If players who are more/less skilled play a disproportionately high number
+* It does not need to be exact. If players who are more/less skilled play a disproportionately high number
 of overall games, it's possible for the average player-specific winrate to be different than 50%.
 '''
 

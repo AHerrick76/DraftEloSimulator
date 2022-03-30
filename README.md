@@ -1,6 +1,6 @@
 # DraftEloSimulator
 
-This repository contains the code used to produce the model and visualizations discussed in my paper, "Drafting Magic for Fun, and Maybe Profit -- A Dynamic Model, Elo Approach to Draft Analysis", linked here:
+This repository contains the code used to produce the model and visualizations discussed in my paper, ["Drafting Magic for Fun, and Maybe Profit -- A Dynamic Model, Elo Approach to Draft Analysis"](https://aherrick76.github.io/assets/Magic_Elo_Simulator.pdf).
 
 ## Repository Structure
 
